@@ -2,19 +2,28 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloatingPill } from './components/FloatingPill';
 import { ExpandedPanel } from './components/ExpandedPanel';
 import { Message } from './types';
-import { BackendChatMessage, sendChatMessage } from './services/api';
+import { BackendChatMessage, streamChatMessage } from './services/api';
 import './App.css';
+
+const INITIAL_WELCOME_MESSAGE: Message = {
+  id: 'msg-welcome-init',
+  sender: 'assistant',
+  text: "Hey! What's on your mind?",
+  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+};
 
 export const App: React.FC = () => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([INITIAL_WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
 
   const collapseTimerRef = useRef<NodeJS.Timeout | null>(null);
   const hoverExpandTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isSubmittingRef = useRef<boolean>(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Sync window size with Electron whenever expansion state changes
   const updateElectronWindow = useCallback((expanded: boolean) => {
@@ -97,6 +106,9 @@ export const App: React.FC = () => {
   };
 
   const handleClose = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     if (window.electronAPI?.closeApp) {
       window.electronAPI.closeApp();
     } else {
@@ -106,22 +118,28 @@ export const App: React.FC = () => {
 
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed || isLoading) return;
+    // Guard against duplicate submission or submitting while waiting
+    if (!trimmed || isLoading || isSubmittingRef.current) return;
 
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    isSubmittingRef.current = true;
+    setIsPinned(true);
+    setIsLoading(true);
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMsgId = `msg-${Date.now()}-user`;
+    const assistantMsgId = `msg-${Date.now()}-assistant`;
 
     const userMessage: Message = {
-      id: `msg-${Date.now()}-user`,
+      id: userMsgId,
       sender: 'user',
       text: trimmed,
       timestamp: timeStr,
     };
 
-    // Construct bounded conversation history payload for backend
+    // Construct bounded conversation history for backend, excluding static welcome message
     const conversationHistory: BackendChatMessage[] = [
       ...messages
-        .filter((m) => (m.sender === 'user' || m.sender === 'assistant') && !m.isError)
+        .filter((m) => (m.sender === 'user' || m.sender === 'assistant') && !m.isError && m.id !== 'msg-welcome-init')
         .slice(-14)
         .map((m) => ({
           role: m.sender as 'user' | 'assistant',
@@ -131,20 +149,62 @@ export const App: React.FC = () => {
     ];
 
     setMessages((prev) => [...prev, userMessage]);
-    setIsPinned(true);
-    setIsLoading(true);
+
+    // Setup abort controller for current stream
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    let hasReceivedFirstChunk = false;
 
     try {
-      const response = await sendChatMessage(conversationHistory);
-      const assistantMessage: Message = {
-        id: `msg-${Date.now()}-assistant`,
-        sender: 'assistant',
-        text: response.content,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        model: response.model,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
+      await streamChatMessage(
+        conversationHistory,
+        {
+          onChunk: (chunk: string) => {
+            if (!hasReceivedFirstChunk) {
+              hasReceivedFirstChunk = true;
+              setIsLoading(false); // Switch from 'Thinking...' to progressive streaming display
+              const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              const assistantMessage: Message = {
+                id: assistantMsgId,
+                sender: 'assistant',
+                text: chunk,
+                timestamp: nowTime,
+              };
+              setMessages((prev) => [...prev, assistantMessage]);
+            } else {
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMsgId
+                    ? { ...msg, text: msg.text + chunk }
+                    : msg
+                )
+              );
+            }
+          },
+          onComplete: () => {
+            setIsLoading(false);
+            isSubmittingRef.current = false;
+          },
+          onError: (errorDetail: string) => {
+            setIsLoading(false);
+            isSubmittingRef.current = false;
+            const errTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const errorMessage: Message = {
+              id: `msg-${Date.now()}-err`,
+              sender: 'system',
+              text: errorDetail,
+              timestamp: errTime,
+              isError: true,
+            };
+            setMessages((prev) => [...prev, errorMessage]);
+          },
+        },
+        controller.signal,
+      );
     } catch (err: any) {
+      setIsLoading(false);
+      isSubmittingRef.current = false;
       const errorText =
         err?.message || 'An unexpected error occurred while communicating with the AI service.';
       const errorMessage: Message = {
@@ -156,7 +216,7 @@ export const App: React.FC = () => {
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
-      setIsLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 

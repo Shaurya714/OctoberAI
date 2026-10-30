@@ -374,6 +374,13 @@
   color: #f87171;
 }
 
+.thinking-text {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
 /* Typing Indicator */
 .typing-indicator {
   display: flex;

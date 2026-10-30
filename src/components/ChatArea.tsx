@@ -33,7 +33,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading = false 
               {msg.sender === 'assistant' && (
                 <div className="message-header-meta">
                   <span className="assistant-label">OctoberAI</span>
-                  {msg.model && <span className="model-badge">{msg.model}</span>}
                 </div>
               )}
               {msg.isError && (
@@ -52,6 +51,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading = false 
             <div className="message-bubble">
               <div className="message-header-meta">
                 <span className="assistant-label">OctoberAI</span>
+                <span className="thinking-text">Thinking...</span>
               </div>
               <div className="typing-indicator" aria-label="OctoberAI is thinking">
                 <span className="typing-dot" />
