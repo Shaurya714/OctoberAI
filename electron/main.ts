@@ -3,11 +3,10 @@ import * as path from 'path';
 
 let mainWindow: BrowserWindow | null = null;
 
-const PILL_WIDTH = 200;
-const PILL_HEIGHT = 48;
-const EXPANDED_WIDTH = 360;
-const EXPANDED_HEIGHT = 520;
-const MARGIN_RIGHT = 24;
+const COLLAPSED_SIZE = 84;
+const EXPANDED_WIDTH = 380;
+const EXPANDED_HEIGHT = 580;
+const MARGIN_RIGHT = 32;
 const MARGIN_TOP = 64;
 
 let isExpanded = false;
@@ -16,12 +15,12 @@ function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { workArea } = primaryDisplay;
 
-  const initialX = Math.round(workArea.x + workArea.width - PILL_WIDTH - MARGIN_RIGHT);
+  const initialX = Math.round(workArea.x + workArea.width - COLLAPSED_SIZE - MARGIN_RIGHT);
   const initialY = Math.round(workArea.y + MARGIN_TOP);
 
   mainWindow = new BrowserWindow({
-    width: PILL_WIDTH,
-    height: PILL_HEIGHT,
+    width: COLLAPSED_SIZE,
+    height: COLLAPSED_SIZE,
     x: initialX,
     y: initialY,
     frame: false,
@@ -63,22 +62,32 @@ ipcMain.handle('set-expanded', (_event, expand: boolean) => {
   const display = screen.getDisplayMatching(currentBounds);
   const workArea = display.workArea;
 
-  const targetWidth = expand ? EXPANDED_WIDTH : PILL_WIDTH;
-  const targetHeight = expand ? EXPANDED_HEIGHT : PILL_HEIGHT;
+  const targetWidth = expand ? EXPANDED_WIDTH : COLLAPSED_SIZE;
+  const targetHeight = expand ? EXPANDED_HEIGHT : COLLAPSED_SIZE;
 
-  // Anchor right edge so expanding expands leftward, and collapsing shrinks rightward
-  const rightEdge = currentBounds.x + currentBounds.width;
-  let newX = rightEdge - targetWidth;
-  let newY = currentBounds.y;
+  let newX: number;
+  let newY: number;
+
+  if (expand) {
+    // Center the expanded window horizontally under the neural core's current center
+    const coreCenterX = currentBounds.x + currentBounds.width / 2;
+    newX = Math.round(coreCenterX - targetWidth / 2);
+    newY = Math.round(currentBounds.y);
+  } else {
+    // Restore collapsed window centered at the neural core's position in expanded window
+    const coreCenterX = currentBounds.x + currentBounds.width / 2;
+    newX = Math.round(coreCenterX - targetWidth / 2);
+    newY = Math.round(currentBounds.y);
+  }
 
   // Clamp within work area bounds
   if (newX < workArea.x + 12) {
     newX = workArea.x + 12;
   }
-  if (newX + targetWidth > workArea.x + workArea.width) {
+  if (newX + targetWidth > workArea.x + workArea.width - 12) {
     newX = workArea.x + workArea.width - targetWidth - 12;
   }
-  if (newY + targetHeight > workArea.y + workArea.height) {
+  if (newY + targetHeight > workArea.y + workArea.height - 12) {
     newY = Math.max(workArea.y + 12, workArea.y + workArea.height - targetHeight - 12);
   }
   if (newY < workArea.y + 12) {
@@ -91,6 +100,12 @@ ipcMain.handle('set-expanded', (_event, expand: boolean) => {
     width: targetWidth,
     height: targetHeight,
   });
+});
+
+ipcMain.handle('move-window', (_event, { deltaX, deltaY }: { deltaX: number; deltaY: number }) => {
+  if (!mainWindow) return;
+  const [currentX, currentY] = mainWindow.getPosition();
+  mainWindow.setPosition(Math.round(currentX + deltaX), Math.round(currentY + deltaY));
 });
 
 ipcMain.handle('close-app', () => {

@@ -3,6 +3,8 @@ import { FloatingPill } from './components/FloatingPill';
 import { ExpandedPanel } from './components/ExpandedPanel';
 import { Message } from './types';
 import { BackendChatMessage, streamChatMessage } from './services/api';
+import { NeuralState } from './components/NeuralCore';
+import { NeuralTheme, getSavedTheme, saveTheme } from './theme';
 import './App.css';
 
 const INITIAL_WELCOME_MESSAGE: Message = {
@@ -13,17 +15,27 @@ const INITIAL_WELCOME_MESSAGE: Message = {
 };
 
 export const App: React.FC = () => {
+  const [theme, setTheme] = useState<NeuralTheme>(getSavedTheme);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const [isInputFocused, setIsInputFocused] = useState(false);
-  const [inputText, setInputText] = useState('');
   const [messages, setMessages] = useState<Message[]>([INITIAL_WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
 
-  const collapseTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const hoverExpandTimerRef = useRef<NodeJS.Timeout | null>(null);
   const isSubmittingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Sync theme with document element and persistence
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const handleSelectTheme = (newTheme: NeuralTheme) => {
+    setTheme(newTheme);
+    saveTheme(newTheme);
+  };
 
   // Sync window size with Electron whenever expansion state changes
   const updateElectronWindow = useCallback((expanded: boolean) => {
@@ -32,78 +44,35 @@ export const App: React.FC = () => {
     }
   }, []);
 
-  const handleExpand = (pinned: boolean) => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = null;
-    }
+  // Explicit user click or trigger to expand
+  const handleExpand = (_pinned: boolean = true) => {
     setIsExpanded(true);
-    if (pinned) {
-      setIsPinned(true);
-    }
     updateElectronWindow(true);
   };
 
+  // Explicit minimize / collapse: only via collapse control or Escape key
   const handleCollapse = () => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = null;
-    }
     setIsExpanded(false);
-    setIsPinned(false);
-    setIsInputFocused(false);
     updateElectronWindow(false);
   };
 
+  // Hover states only affect neural activity, never trigger expansion
   const handleHoverStart = () => {
-    if (collapseTimerRef.current) {
-      clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = null;
-    }
-
-    if (!isExpanded) {
-      // Short delay on hover to avoid accidental trigger on cursor pass-by
-      hoverExpandTimerRef.current = setTimeout(() => {
-        handleExpand(false);
-      }, 140);
-    }
+    setIsHovered(true);
   };
 
+  // Hover end never collapses the expanded assistant
   const handleHoverEnd = () => {
-    if (hoverExpandTimerRef.current) {
-      clearTimeout(hoverExpandTimerRef.current);
-      hoverExpandTimerRef.current = null;
-    }
-
-    // Only auto-collapse if:
-    // 1. Not pinned
-    // 2. Not loading an AI response
-    // 3. Input is not currently focused
-    // 4. User hasn't typed an unsent draft
-    if (!isPinned && !isLoading && !isInputFocused && inputText.trim().length === 0) {
-      collapseTimerRef.current = setTimeout(() => {
-        handleCollapse();
-      }, 400);
-    }
+    setIsHovered(false);
   };
 
   const handleTogglePin = () => {
     setIsPinned((prev) => !prev);
   };
 
-  const handleInputFocusChange = (focused: boolean) => {
-    setIsInputFocused(focused);
-    if (focused) {
-      setIsPinned(true);
-    }
-  };
+  const handleInputFocusChange = (_focused: boolean) => {};
 
-  const handleInputChange = (text: string) => {
-    setInputText(text);
-    if (text.trim().length > 0) {
-      setIsPinned(true);
-    }
-  };
+  const handleInputChange = (_text: string) => {};
 
   const handleClose = () => {
     if (abortControllerRef.current) {
@@ -119,11 +88,12 @@ export const App: React.FC = () => {
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
     // Guard against duplicate submission or submitting while waiting
-    if (!trimmed || isLoading || isSubmittingRef.current) return;
+    if (!trimmed || isLoading || isStreaming || isSubmittingRef.current) return;
 
     isSubmittingRef.current = true;
-    setIsPinned(true);
     setIsLoading(true);
+    setIsStreaming(false);
+    setHasError(false);
 
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `msg-${Date.now()}-user`;
@@ -164,6 +134,7 @@ export const App: React.FC = () => {
             if (!hasReceivedFirstChunk) {
               hasReceivedFirstChunk = true;
               setIsLoading(false); // Switch from 'Thinking...' to progressive streaming display
+              setIsStreaming(true);
               const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               const assistantMessage: Message = {
                 id: assistantMsgId,
@@ -184,11 +155,16 @@ export const App: React.FC = () => {
           },
           onComplete: () => {
             setIsLoading(false);
+            setIsStreaming(false);
             isSubmittingRef.current = false;
           },
           onError: (errorDetail: string) => {
             setIsLoading(false);
+            setIsStreaming(false);
             isSubmittingRef.current = false;
+            setHasError(true);
+            setTimeout(() => setHasError(false), 2400);
+
             const errTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             const errorMessage: Message = {
               id: `msg-${Date.now()}-err`,
@@ -204,7 +180,11 @@ export const App: React.FC = () => {
       );
     } catch (err: any) {
       setIsLoading(false);
+      setIsStreaming(false);
       isSubmittingRef.current = false;
+      setHasError(true);
+      setTimeout(() => setHasError(false), 2400);
+
       const errorText =
         err?.message || 'An unexpected error occurred while communicating with the AI service.';
       const errorMessage: Message = {
@@ -220,16 +200,16 @@ export const App: React.FC = () => {
     }
   };
 
-  // Keyboard accessibility: Escape collapses back to pill
+  // Keyboard accessibility: Escape collapses back to neural presence
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isExpanded && !isLoading) {
+      if (e.key === 'Escape' && isExpanded && !isLoading && !isStreaming) {
         handleCollapse();
       }
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isExpanded, isLoading]);
+  }, [isExpanded, isLoading, isStreaming]);
 
   // Listen to IPC force-collapse from main process if sent
   useEffect(() => {
@@ -241,6 +221,18 @@ export const App: React.FC = () => {
     }
   }, []);
 
+  const currentNeuralState: NeuralState = hasError
+    ? 'error'
+    : isLoading
+    ? 'processing'
+    : isStreaming
+    ? 'responding'
+    : isExpanded
+    ? 'expanded'
+    : isHovered
+    ? 'hover'
+    : 'idle';
+
   return (
     <main className="app-container">
       {!isExpanded ? (
@@ -248,12 +240,17 @@ export const App: React.FC = () => {
           onExpand={handleExpand}
           onHoverStart={handleHoverStart}
           onHoverEnd={handleHoverEnd}
+          state={currentNeuralState}
+          theme={theme}
         />
       ) : (
         <ExpandedPanel
           messages={messages}
           isPinned={isPinned}
-          isLoading={isLoading}
+          isLoading={isLoading || isStreaming}
+          neuralState={currentNeuralState}
+          theme={theme}
+          onSelectTheme={handleSelectTheme}
           onTogglePin={handleTogglePin}
           onCollapse={handleCollapse}
           onClose={handleClose}

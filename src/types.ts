@@ -16,6 +16,7 @@ export interface ElectronAPI {
   setExpanded: (expanded: boolean) => Promise<void>;
   closeApp: () => Promise<void>;
   minimizeApp: () => Promise<void>;
+  moveWindow?: (deltaX: number, deltaY: number) => Promise<void>;
   onForceCollapse?: (callback: () => void) => () => void;
 }
 
