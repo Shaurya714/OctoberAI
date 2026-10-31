@@ -52,7 +52,7 @@ export async function streamChatMessage(
       return;
     }
     throw new Error(
-      `Cannot connect to OctoberAI backend at ${BACKEND_URL}. Please ensure the FastAPI server is running.`
+      `Cannot connect to October backend at ${BACKEND_URL}. Please ensure the FastAPI server is running.`
     );
   }
 
@@ -133,7 +133,7 @@ export async function sendChatMessage(messages: BackendChatMessage[]): Promise<C
     });
   } catch {
     throw new Error(
-      `Cannot connect to OctoberAI backend at ${BACKEND_URL}. Please ensure the FastAPI server is running.`
+      `Cannot connect to October backend at ${BACKEND_URL}. Please ensure the FastAPI server is running.`
     );
   }
 

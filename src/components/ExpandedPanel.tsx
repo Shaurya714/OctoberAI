@@ -6,6 +6,7 @@ import { CloseIcon, CollapseIcon, PinIcon, PaletteIcon, CheckIcon } from './Icon
 import { Message } from '../types';
 import { NeuralCore, NeuralState } from './NeuralCore';
 import { NeuralTheme } from '../theme';
+import { AudioInputSource } from '../services/audioCapture';
 
 interface ExpandedPanelProps {
   messages: Message[];
@@ -13,6 +14,14 @@ interface ExpandedPanelProps {
   isLoading?: boolean;
   neuralState?: NeuralState;
   theme?: NeuralTheme;
+  audioLevel?: number;
+  isVoiceListening?: boolean;
+  voiceTranscript?: string;
+  interimVoiceTranscript?: string;
+  voiceInputSource?: AudioInputSource;
+  voiceError?: string | null;
+  isSpeaking?: boolean;
+  onStopSpeaking?: () => void;
   onSelectTheme: (theme: NeuralTheme) => void;
   onTogglePin: () => void;
   onCollapse: () => void;
@@ -22,6 +31,10 @@ interface ExpandedPanelProps {
   onInputChange: (text: string) => void;
   onMouseEnter: () => void;
   onMouseLeave: () => void;
+  onToggleVoice: () => void;
+  onChangeVoiceSource: (source: AudioInputSource) => void;
+  onToggleScreenAwareness: () => void;
+  onConfirmVoiceTranscript: (text: string) => void;
 }
 
 export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
@@ -30,6 +43,14 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
   isLoading = false,
   neuralState = 'expanded',
   theme = 'blue',
+  audioLevel = 0,
+  isVoiceListening = false,
+  voiceTranscript = '',
+  interimVoiceTranscript = '',
+  voiceInputSource = 'microphone',
+  voiceError = null,
+  isSpeaking = false,
+  onStopSpeaking,
   onSelectTheme,
   onTogglePin,
   onCollapse,
@@ -39,6 +60,10 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
   onInputChange,
   onMouseEnter,
   onMouseLeave,
+  onToggleVoice,
+  onChangeVoiceSource,
+  onToggleScreenAwareness,
+  onConfirmVoiceTranscript,
 }) => {
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false);
   const themeSelectorRef = useRef<HTMLDivElement | null>(null);
@@ -74,14 +99,17 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       role="region"
-      aria-label="OctoberAI Neural Assistant"
+      aria-label="October Neural Assistant"
     >
       {/* 1. Top Neural Masthead with draggable anchor and controls */}
       <div className="neural-masthead">
         {/* Subtle controls row */}
         <div className="masthead-controls-bar">
           <div className="masthead-status">
-            <StatusIndicator status={isLoading ? 'busy' : 'ready'} showLabel />
+            <StatusIndicator
+              status={isLoading ? 'busy' : isVoiceListening ? 'busy' : 'ready'}
+              showLabel
+            />
           </div>
 
           <div className="masthead-actions">
@@ -162,7 +190,7 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
               type="button"
               className="control-btn control-btn-close"
               onClick={onClose}
-              title="Close OctoberAI"
+              title="Close October"
               aria-label="Close application"
             >
               <CloseIcon size={12} />
@@ -173,12 +201,77 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
         {/* Floating Neural Core at top center */}
         <div className="masthead-core-wrapper">
           <NeuralCore
-            size={98}
+            size={102}
             state={neuralState}
             theme={theme}
+            audioLevel={audioLevel}
             className="masthead-neural-core"
           />
         </div>
+
+        {/* 4.1 Live Voice Transcription Placement directly below expanded neural core */}
+        {(isVoiceListening || voiceTranscript || interimVoiceTranscript || voiceError) && (
+          <div className="voice-transcription-container" role="status" aria-live="polite">
+            <div className="voice-transcription-header">
+              <span className="voice-transcription-badge">
+                <span className="live-mic-dot" />
+                {voiceInputSource === 'system' ? 'System Audio' : 'Microphone'}
+              </span>
+              {voiceTranscript && (
+                <button
+                  type="button"
+                  className="btn-send-transcript"
+                  onClick={() => onConfirmVoiceTranscript(voiceTranscript)}
+                  title="Send transcribed speech to chat"
+                  aria-label="Send transcribed speech"
+                >
+                  Send ↵
+                </button>
+              )}
+            </div>
+
+            {voiceError ? (
+              <div className="voice-error-banner">
+                <span>{voiceError}</span>
+              </div>
+            ) : (
+              <div className="voice-transcript-text">
+                {voiceTranscript && (
+                  <span className="final-transcript">{voiceTranscript}</span>
+                )}
+                {interimVoiceTranscript && (
+                  <span className="interim-transcript"> {interimVoiceTranscript}</span>
+                )}
+                {!voiceTranscript && !interimVoiceTranscript && (
+                  <span className="listening-placeholder">Listening for English speech...</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Voice Response Spoken Playback Banner */}
+        {isSpeaking && (
+          <div className="speaking-playback-bar" role="status">
+            <div className="speaking-wave-dots" aria-hidden="true">
+              <span className="wave-dot" />
+              <span className="wave-dot" />
+              <span className="wave-dot" />
+            </div>
+            <span className="speaking-label">October is speaking response...</span>
+            {onStopSpeaking && (
+              <button
+                type="button"
+                className="btn-stop-speaking"
+                onClick={onStopSpeaking}
+                title="Stop spoken audio"
+                aria-label="Stop spoken audio"
+              >
+                Stop Audio
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Luminous neural connection filament leading into the chat surface */}
         <div className="neural-conduit-line" aria-hidden="true" />
@@ -195,6 +288,11 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
           onFocusChange={onInputFocusChange}
           onInputChange={onInputChange}
           isLoading={isLoading}
+          isVoiceListening={isVoiceListening}
+          voiceInputSource={voiceInputSource}
+          onToggleVoice={onToggleVoice}
+          onChangeVoiceSource={onChangeVoiceSource}
+          onToggleScreenAwareness={onToggleScreenAwareness}
         />
       </div>
     </div>

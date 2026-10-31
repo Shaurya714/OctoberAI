@@ -1,12 +1,15 @@
 import React, { useRef, useEffect } from 'react';
 import { NeuralTheme, THEME_PALETTES } from '../theme';
+import { audioCaptureService } from '../services/audioCapture';
 
 export type NeuralState =
   | 'idle'
   | 'hover'
   | 'listening'
+  | 'transcribing'
   | 'processing'
   | 'responding'
+  | 'speaking'
   | 'error'
   | 'expanded';
 
@@ -16,6 +19,7 @@ interface NeuralCoreProps {
   size?: number; // Visual size in px (e.g. 80 in collapsed, 98 in expanded)
   className?: string;
   isWindowDragging?: boolean;
+  audioLevel?: number; // 0.0 to 1.0 audio volume level for voice reactivity
   onClick?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -63,8 +67,8 @@ interface Particle {
 
 const NODE_COUNT = 68;
 const FOCAL_LENGTH = 195;
-const HOVER_ROTATION_SENSITIVITY = 0.0042;
-const AUTO_YAW_SPEED = 0.055; // Subtle, calm autonomous cosmic drift (rad/s)
+const HOVER_ROTATION_SENSITIVITY = 0.0038;
+const AUTO_YAW_SPEED = 0.22; // Calm, steady, permanent autonomous 3D rotation (rad/s)
 
 export const NeuralCore: React.FC<NeuralCoreProps> = ({
   state = 'idle',
@@ -72,6 +76,7 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
   size = 80,
   className = '',
   isWindowDragging = false,
+  audioLevel = 0,
   onClick,
   onMouseEnter,
   onMouseLeave,
@@ -79,17 +84,23 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
+  const stateRef = useRef<NeuralState>(state);
   const themeRef = useRef<NeuralTheme>(theme);
   const isDraggingRef = useRef<boolean>(isWindowDragging);
+  const audioLevelRef = useRef<number>(audioLevel);
 
+  stateRef.current = state;
   themeRef.current = theme;
   isDraggingRef.current = isWindowDragging;
+  audioLevelRef.current = audioLevel;
 
   // Simulation persistent state
   const simRef = useRef<{
     nodes: Node3D[];
     connections: Connection[];
     particles: Particle[];
+    connIndices: number[];
+    nodeIndices: number[];
     time: number;
     lastTimestamp: number;
     errorTimer: number;
@@ -107,6 +118,8 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
     nodes: [],
     connections: [],
     particles: [],
+    connIndices: [],
+    nodeIndices: [],
     time: 0,
     lastTimestamp: 0,
     errorTimer: 0,
@@ -207,6 +220,10 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
     simRef.current.nodes = nodes;
     simRef.current.connections = connections;
     simRef.current.particles = [];
+    simRef.current.connIndices = new Array(connections.length);
+    for (let i = 0; i < connections.length; i++) simRef.current.connIndices[i] = i;
+    simRef.current.nodeIndices = new Array(nodes.length);
+    for (let i = 0; i < nodes.length; i++) simRef.current.nodeIndices[i] = i;
   }, [size]);
 
   // Error state trigger
@@ -277,23 +294,37 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
       const dt = Math.min((timestamp - sim.lastTimestamp) / 1000, 0.08);
       sim.lastTimestamp = timestamp;
 
-      // State speeds & particle traffic
+      // State speeds & particle traffic with real-time audio reactivity (direct sampling without React re-renders)
+      const curState = stateRef.current;
+      const liveAudio = audioCaptureService.getIsCapturing() ? audioCaptureService.getSmoothedLevel() : 0;
+      const curAudio = Math.max(0, Math.min(1, Math.max(audioLevelRef.current || 0, liveAudio)));
+
       let speedMult = 1.0;
       let targetParticleCount = 4;
       let filamentAlphaMultiplier = 1.0;
 
-      if (state === 'hover') {
+      if (curState === 'hover') {
         speedMult = 1.15;
         targetParticleCount = 5;
-      } else if (state === 'processing') {
+      } else if (curState === 'listening' || curState === 'transcribing') {
+        // Active listening state: dynamic volume-responsive expansion & packet traffic
+        speedMult = 1.15 + curAudio * 1.6;
+        targetParticleCount = 5 + Math.round(curAudio * 6);
+        filamentAlphaMultiplier = 1.15 + curAudio * 0.45;
+      } else if (curState === 'speaking') {
+        // Active speaking state: responsive filament energy
+        speedMult = 1.25 + curAudio * 0.9;
+        targetParticleCount = 6 + Math.round(curAudio * 4);
+        filamentAlphaMultiplier = 1.2 + curAudio * 0.35;
+      } else if (curState === 'processing') {
         speedMult = 1.8;
         targetParticleCount = 8;
         filamentAlphaMultiplier = 1.25;
-      } else if (state === 'responding') {
+      } else if (curState === 'responding') {
         speedMult = 1.4;
         targetParticleCount = 6;
         filamentAlphaMultiplier = 1.15;
-      } else if (state === 'expanded') {
+      } else if (curState === 'expanded') {
         speedMult = 0.95;
         targetParticleCount = 5;
       }
@@ -311,35 +342,44 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
       const centerY = height / 2;
       const sphereRadius = size * 0.41;
 
-      // Subtle Breathing Effect
-      const breath = 1.0 + 0.022 * Math.sin(t * 1.1);
-      const breathLuminosity = 1.0 + 0.06 * Math.sin(t * 1.1);
+      // Subtle Breathing Effect & Audio Volume Reactivity:
+      // Louder speech produces noticeable expansion; silence produces a gentle breathing curve
+      const isVoiceActive = curState === 'listening' || curState === 'transcribing' || curState === 'speaking';
+      const audioExpansion = isVoiceActive ? curAudio * 0.24 : 0;
+      const audioLuminosity = isVoiceActive ? curAudio * 0.45 : 0;
 
-      // Natural Cursor-Controlled 3D Rotation Physics
+      const breath = 1.0 + 0.022 * Math.sin(t * 1.1) + audioExpansion;
+      const breathLuminosity = 1.0 + 0.06 * Math.sin(t * 1.1) + audioLuminosity;
+
+      // 4 & 5. Permanent Slow Neural Rotation in one consistent direction + Smooth Cursor Influence
+      // Constant base rotation runs ALWAYS every single frame (dt frame-rate independent)
+      sim.rotYaw += AUTO_YAW_SPEED * dt;
+
       const isWindowDraggingNow = isDraggingRef.current;
       const now = performance.now();
       const timeSinceHover = now - sim.lastHoverTime;
 
       if (!isWindowDraggingNow && sim.isHoverActive) {
+        // Cursor movement augments the steady rotation
         sim.rotYaw += sim.velYaw;
         sim.rotPitch += sim.velPitch;
 
-        // Smooth fluid damping
-        sim.velYaw *= 0.91;
-        sim.velPitch *= 0.91;
+        // Smooth fluid damping of cursor impulse
+        sim.velYaw *= 0.90;
+        sim.velPitch *= 0.90;
 
         // Soft clamp pitch to comfortable viewing range
-        sim.rotPitch = Math.max(-0.75, Math.min(0.75, sim.rotPitch));
+        sim.rotPitch = Math.max(-0.65, Math.min(0.65, sim.rotPitch));
 
-        // When mouse movement stops, smoothly transition into idle drift
-        if (timeSinceHover > 140 && Math.abs(sim.velYaw) < 0.001 && Math.abs(sim.velPitch) < 0.001) {
+        // When mouse interaction ceases, smoothly settle back to pure steady autonomous rotation
+        if (timeSinceHover > 150 && Math.abs(sim.velYaw) < 0.0004 && Math.abs(sim.velPitch) < 0.0004) {
           sim.isHoverActive = false;
+          sim.velYaw = 0;
+          sim.velPitch = 0;
         }
-      } else if (!isWindowDraggingNow) {
-        // Subtle autonomous cosmic drift
-        sim.rotYaw += AUTO_YAW_SPEED * dt;
-        // Restorative spring to keep pitch at ideal resting elevation
-        sim.rotPitch += (0.08 - sim.rotPitch) * 0.025 * dt * 60;
+      } else {
+        // Restorative spring to smoothly maintain pitch at ideal resting elevation
+        sim.rotPitch += (0.08 - sim.rotPitch) * (1 - Math.exp(-2.5 * dt));
       }
 
       // Precalculate rotation matrix (Pitch around horizontal X, Yaw around vertical Y)
@@ -466,14 +506,23 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
       ctx.fill();
 
       // (b) Draw Connecting Filaments with 3D Depth Layering (Back connections drawn first)
-      const sortedConns = [...connections].sort((a, b) => {
-        const avgZa = (nodes[a.i].rotZ + nodes[a.j].rotZ) * 0.5;
-        const avgZb = (nodes[b.i].rotZ + nodes[b.j].rotZ) * 0.5;
+      // Zero-allocation in-place sort using pre-allocated index buffer
+      const connIndices = sim.connIndices;
+      if (connIndices.length !== connections.length) {
+        sim.connIndices = new Array(connections.length);
+        for (let i = 0; i < connections.length; i++) sim.connIndices[i] = i;
+      }
+      for (let i = 0; i < connections.length; i++) sim.connIndices[i] = i;
+      sim.connIndices.sort((a, b) => {
+        const cA = connections[a];
+        const cB = connections[b];
+        const avgZa = nodes[cA.i].rotZ + nodes[cA.j].rotZ;
+        const avgZb = nodes[cB.i].rotZ + nodes[cB.j].rotZ;
         return avgZb - avgZa; // Back (z > 0) to front (z < 0)
       });
 
-      for (let c = 0; c < sortedConns.length; c++) {
-        const conn = sortedConns[c];
+      for (let c = 0; c < sim.connIndices.length; c++) {
+        const conn = connections[sim.connIndices[c]];
         const nA = nodes[conn.i];
         const nB = nodes[conn.j];
 
@@ -545,10 +594,16 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
       }
 
       // (d) Draw Individual Nodes (Sorted back-to-front for clean 3D occlusion)
-      const sortedNodes = [...nodes].sort((a, b) => b.rotZ - a.rotZ);
+      // Zero-allocation in-place sort using pre-allocated index buffer
+      if (sim.nodeIndices.length !== nodes.length) {
+        sim.nodeIndices = new Array(nodes.length);
+        for (let i = 0; i < nodes.length; i++) sim.nodeIndices[i] = i;
+      }
+      for (let i = 0; i < nodes.length; i++) sim.nodeIndices[i] = i;
+      sim.nodeIndices.sort((a, b) => nodes[b].rotZ - nodes[a].rotZ);
 
-      for (let i = 0; i < sortedNodes.length; i++) {
-        const n = sortedNodes[i];
+      for (let i = 0; i < sim.nodeIndices.length; i++) {
+        const n = nodes[sim.nodeIndices[i]];
         const nodeRadius = Math.max(0.85, Math.min(2.5, n.baseRadius * n.projScale * (1 + n.flash * 0.4)));
         const alpha = Math.min(1.0, (n.depthAlpha + n.flash * 0.45) * breathLuminosity);
         const isFront = n.rotZ < 0;
@@ -593,7 +648,7 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
         cancelAnimationFrame(animFrameIdRef.current);
       }
     };
-  }, [size, state]);
+  }, [size]);
 
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const canvasWidth = Math.round(size * dpr);
@@ -627,7 +682,7 @@ export const NeuralCore: React.FC<NeuralCoreProps> = ({
           cursor: isWindowDragging ? 'grabbing' : 'grab',
           touchAction: 'none',
         }}
-        aria-label="OctoberAI Neural Core"
+        aria-label="October Neural Core"
         role="button"
         tabIndex={0}
       />

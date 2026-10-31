@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloatingPill } from './components/FloatingPill';
 import { ExpandedPanel } from './components/ExpandedPanel';
+import { ScreenAwareness } from './components/ScreenAwareness';
 import { Message } from './types';
 import { BackendChatMessage, streamChatMessage } from './services/api';
 import { NeuralState } from './components/NeuralCore';
 import { NeuralTheme, getSavedTheme, saveTheme } from './theme';
+import { audioCaptureService, AudioInputSource } from './services/audioCapture';
+import { speechRecognitionService } from './services/speechRecognition';
+import { ttsService } from './services/speechSynthesis';
 import './App.css';
 
 const INITIAL_WELCOME_MESSAGE: Message = {
@@ -17,6 +21,7 @@ const INITIAL_WELCOME_MESSAGE: Message = {
 export const App: React.FC = () => {
   const [theme, setTheme] = useState<NeuralTheme>(getSavedTheme);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isScreenMode, setIsScreenMode] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const [messages, setMessages] = useState<Message[]>([INITIAL_WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
@@ -24,8 +29,18 @@ export const App: React.FC = () => {
   const [hasError, setHasError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
+  // Voice Interaction Mode State
+  const [isVoiceListening, setIsVoiceListening] = useState(false);
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [interimVoiceTranscript, setInterimVoiceTranscript] = useState('');
+  const [voiceInputSource, setVoiceInputSource] = useState<AudioInputSource>('microphone');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
   const isSubmittingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const accumulatedAssistantTextRef = useRef<string>('');
 
   // Sync theme with document element and persistence
   useEffect(() => {
@@ -38,30 +53,43 @@ export const App: React.FC = () => {
   };
 
   // Sync window size with Electron whenever expansion state changes
-  const updateElectronWindow = useCallback((expanded: boolean) => {
-    if (window.electronAPI?.setExpanded) {
-      window.electronAPI.setExpanded(expanded).catch(console.error);
+  const updateElectronWindow = useCallback((mode: 'collapsed' | 'chat' | 'screen') => {
+    if (window.electronAPI?.setAppMode) {
+      window.electronAPI.setAppMode(mode).catch(console.error);
+    } else if (window.electronAPI?.setExpanded) {
+      window.electronAPI.setExpanded(mode !== 'collapsed').catch(console.error);
     }
   }, []);
 
   // Explicit user click or trigger to expand
   const handleExpand = (_pinned: boolean = true) => {
     setIsExpanded(true);
-    updateElectronWindow(true);
+    updateElectronWindow(isScreenMode ? 'screen' : 'chat');
   };
 
+  const stopVoiceMode = useCallback(() => {
+    setIsVoiceListening(false);
+    audioCaptureService.stop();
+    speechRecognitionService.stop();
+    setAudioLevel(0);
+  }, []);
+
   // Explicit minimize / collapse: only via collapse control or Escape key
-  const handleCollapse = () => {
+  const handleCollapse = useCallback(() => {
+    // Stop any active voice capture and speech playback
+    stopVoiceMode();
+    ttsService.stop();
+    setIsSpeaking(false);
+    setIsScreenMode(false);
     setIsExpanded(false);
-    updateElectronWindow(false);
-  };
+    updateElectronWindow('collapsed');
+  }, [stopVoiceMode, updateElectronWindow]);
 
   // Hover states only affect neural activity, never trigger expansion
   const handleHoverStart = () => {
     setIsHovered(true);
   };
 
-  // Hover end never collapses the expanded assistant
   const handleHoverEnd = () => {
     setIsHovered(false);
   };
@@ -75,6 +103,8 @@ export const App: React.FC = () => {
   const handleInputChange = (_text: string) => {};
 
   const handleClose = () => {
+    stopVoiceMode();
+    ttsService.stop();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -85,15 +115,145 @@ export const App: React.FC = () => {
     }
   };
 
+  // Voice Interaction Mode Handlers
+  const startVoiceMode = async (source: AudioInputSource) => {
+    // Stop any active TTS playback
+    ttsService.stop();
+    setIsSpeaking(false);
+    setVoiceError(null);
+    setVoiceTranscript('');
+    setInterimVoiceTranscript('');
+    setIsVoiceListening(true);
+
+    // 1. Audio Level Analyzer for Audio-Reactive NeuralCore
+    const audioStarted = await audioCaptureService.start(source, {
+      onError: (err) => setVoiceError(err),
+    });
+
+    if (!audioStarted) {
+      setIsVoiceListening(false);
+      return;
+    }
+
+    // 2. English Speech Recognition
+    if (source === 'microphone') {
+      const recognitionStarted = speechRecognitionService.start({
+        onStart: () => {},
+        onInterimResult: (interim) => {
+          setInterimVoiceTranscript(interim);
+        },
+        onFinalResult: (final) => {
+          setVoiceTranscript(final);
+          setInterimVoiceTranscript('');
+        },
+        onError: (err, isFatal) => {
+          setVoiceError(err);
+          if (isFatal) {
+            setIsVoiceListening(false);
+            audioCaptureService.stop();
+          }
+        },
+        onEnd: () => {},
+      });
+
+      if (!recognitionStarted) {
+        setVoiceError(
+          'Live speech recognition is not supported in this runtime. Audio level reactivity is active.'
+        );
+      }
+    } else {
+      // System audio capture active: visualizer active, document honest limitation
+      setVoiceTranscript('');
+      setInterimVoiceTranscript('Capturing computer audio playback... (Audio-reactive visualization active)');
+    }
+  };
+
+  const handleToggleVoice = () => {
+    if (isSpeaking) {
+      ttsService.stop();
+      setIsSpeaking(false);
+    }
+
+    if (isVoiceListening) {
+      stopVoiceMode();
+    } else {
+      // Exit screen mode if currently active (mutual exclusivity)
+      if (isScreenMode) {
+        setIsScreenMode(false);
+        updateElectronWindow('chat');
+      }
+      if (!isExpanded) {
+        setIsExpanded(true);
+        updateElectronWindow('chat');
+      }
+      startVoiceMode(voiceInputSource);
+    }
+  };
+
+  const handleChangeVoiceSource = (source: AudioInputSource) => {
+    setVoiceInputSource(source);
+    if (isVoiceListening) {
+      startVoiceMode(source);
+    }
+  };
+
+  const handleConfirmVoiceTranscript = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    stopVoiceMode();
+    setVoiceTranscript('');
+    setInterimVoiceTranscript('');
+    handleSendMessage(trimmed);
+  };
+
+  // Screen Awareness Handlers
+  const handleToggleScreenAwareness = () => {
+    if (isSpeaking) {
+      ttsService.stop();
+      setIsSpeaking(false);
+    }
+    if (isVoiceListening) {
+      stopVoiceMode();
+    }
+
+    if (!isScreenMode) {
+      setIsScreenMode(true);
+      updateElectronWindow('screen');
+    } else {
+      handleExitScreenMode();
+    }
+  };
+
+  const handleExitScreenMode = () => {
+    setIsScreenMode(false);
+    setIsExpanded(true);
+    updateElectronWindow('chat');
+  };
+
+  // Clean up audio & speech on unmount
+  useEffect(() => {
+    return () => {
+      audioCaptureService.stop();
+      speechRecognitionService.stop();
+      ttsService.stop();
+    };
+  }, []);
+
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
-    // Guard against duplicate submission or submitting while waiting
     if (!trimmed || isLoading || isStreaming || isSubmittingRef.current) return;
+
+    // Interrupt any ongoing speech
+    if (isSpeaking) {
+      ttsService.stop();
+      setIsSpeaking(false);
+    }
 
     isSubmittingRef.current = true;
     setIsLoading(true);
     setIsStreaming(false);
     setHasError(false);
+    accumulatedAssistantTextRef.current = '';
 
     const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `msg-${Date.now()}-user`;
@@ -106,7 +266,6 @@ export const App: React.FC = () => {
       timestamp: timeStr,
     };
 
-    // Construct bounded conversation history for backend, excluding static welcome message
     const conversationHistory: BackendChatMessage[] = [
       ...messages
         .filter((m) => (m.sender === 'user' || m.sender === 'assistant') && !m.isError && m.id !== 'msg-welcome-init')
@@ -120,7 +279,6 @@ export const App: React.FC = () => {
 
     setMessages((prev) => [...prev, userMessage]);
 
-    // Setup abort controller for current stream
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
@@ -131,9 +289,10 @@ export const App: React.FC = () => {
         conversationHistory,
         {
           onChunk: (chunk: string) => {
+            accumulatedAssistantTextRef.current += chunk;
             if (!hasReceivedFirstChunk) {
               hasReceivedFirstChunk = true;
-              setIsLoading(false); // Switch from 'Thinking...' to progressive streaming display
+              setIsLoading(false);
               setIsStreaming(true);
               const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
               const assistantMessage: Message = {
@@ -157,6 +316,16 @@ export const App: React.FC = () => {
             setIsLoading(false);
             setIsStreaming(false);
             isSubmittingRef.current = false;
+
+            // Section 3.5: Speak completed AI response using frontend text-to-speech
+            const fullResponse = accumulatedAssistantTextRef.current;
+            if (fullResponse) {
+              ttsService.speak(fullResponse, {
+                onStart: () => setIsSpeaking(true),
+                onEnd: () => setIsSpeaking(false),
+                onError: () => setIsSpeaking(false),
+              });
+            }
           },
           onError: (errorDetail: string) => {
             setIsLoading(false);
@@ -200,18 +369,27 @@ export const App: React.FC = () => {
     }
   };
 
-  // Keyboard accessibility: Escape collapses back to neural presence
+  // Keyboard accessibility: Escape exits Screen Mode or collapses Expanded Panel
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isExpanded && !isLoading && !isStreaming) {
-        handleCollapse();
+      if (e.key === 'Escape') {
+        if (isScreenMode) {
+          handleExitScreenMode();
+        } else if (isVoiceListening) {
+          stopVoiceMode();
+        } else if (isSpeaking) {
+          ttsService.stop();
+          setIsSpeaking(false);
+        } else if (isExpanded && !isLoading && !isStreaming) {
+          handleCollapse();
+        }
       }
     };
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isExpanded, isLoading, isStreaming]);
+  }, [isScreenMode, isVoiceListening, isSpeaking, isExpanded, isLoading, isStreaming, handleCollapse, stopVoiceMode]);
 
-  // Listen to IPC force-collapse from main process if sent
+  // Listen to IPC force-collapse from main process
   useEffect(() => {
     if (window.electronAPI?.onForceCollapse) {
       const unsubscribe = window.electronAPI.onForceCollapse(() => {
@@ -219,15 +397,21 @@ export const App: React.FC = () => {
       });
       return unsubscribe;
     }
-  }, []);
+  }, [handleCollapse]);
 
   const currentNeuralState: NeuralState = hasError
     ? 'error'
+    : isSpeaking
+    ? 'speaking'
+    : isVoiceListening
+    ? interimVoiceTranscript || voiceTranscript
+      ? 'transcribing'
+      : 'listening'
     : isLoading
     ? 'processing'
     : isStreaming
     ? 'responding'
-    : isExpanded
+    : isExpanded || isScreenMode
     ? 'expanded'
     : isHovered
     ? 'hover'
@@ -243,6 +427,12 @@ export const App: React.FC = () => {
           state={currentNeuralState}
           theme={theme}
         />
+      ) : isScreenMode ? (
+        <ScreenAwareness
+          theme={theme}
+          onExit={handleExitScreenMode}
+          onClose={handleClose}
+        />
       ) : (
         <ExpandedPanel
           messages={messages}
@@ -250,6 +440,17 @@ export const App: React.FC = () => {
           isLoading={isLoading || isStreaming}
           neuralState={currentNeuralState}
           theme={theme}
+          audioLevel={audioLevel}
+          isVoiceListening={isVoiceListening}
+          voiceTranscript={voiceTranscript}
+          interimVoiceTranscript={interimVoiceTranscript}
+          voiceInputSource={voiceInputSource}
+          voiceError={voiceError}
+          isSpeaking={isSpeaking}
+          onStopSpeaking={() => {
+            ttsService.stop();
+            setIsSpeaking(false);
+          }}
           onSelectTheme={handleSelectTheme}
           onTogglePin={handleTogglePin}
           onCollapse={handleCollapse}
@@ -259,6 +460,10 @@ export const App: React.FC = () => {
           onInputChange={handleInputChange}
           onMouseEnter={handleHoverStart}
           onMouseLeave={handleHoverEnd}
+          onToggleVoice={handleToggleVoice}
+          onChangeVoiceSource={handleChangeVoiceSource}
+          onToggleScreenAwareness={handleToggleScreenAwareness}
+          onConfirmVoiceTranscript={handleConfirmVoiceTranscript}
         />
       )}
     </main>

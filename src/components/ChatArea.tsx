@@ -18,7 +18,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading = false 
   return (
     <div className="chat-area" ref={scrollRef} tabIndex={0} aria-label="Conversation history">
       <div className="welcome-banner">
-        <div className="welcome-title">Welcome to OctoberAI</div>
+        <div className="welcome-title">Welcome to October</div>
       </div>
 
       <div className="messages-list" role="log" aria-live="polite">
@@ -32,7 +32,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading = false 
             <div className="message-bubble">
               {msg.sender === 'assistant' && (
                 <div className="message-header-meta">
-                  <span className="assistant-label">OctoberAI</span>
+                  <span className="assistant-label" data-internal-id="OctoberAI">October</span>
                 </div>
               )}
               {msg.isError && (
@@ -50,10 +50,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, isLoading = false 
           <div className="message-bubble-wrapper message-assistant message-loading">
             <div className="message-bubble">
               <div className="message-header-meta">
-                <span className="assistant-label">OctoberAI</span>
+                <span className="assistant-label" data-internal-id="OctoberAI">October</span>
                 <span className="thinking-text">Thinking...</span>
               </div>
-              <div className="typing-indicator" aria-label="OctoberAI is thinking">
+              <div className="typing-indicator" aria-label="October is thinking">
                 <span className="typing-dot" />
                 <span className="typing-dot" />
                 <span className="typing-dot" />

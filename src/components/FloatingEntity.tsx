@@ -148,8 +148,8 @@ export const FloatingEntity: React.FC<FloatingEntityProps> = ({
         tabIndex={0}
         onKeyDown={handleKeyDown}
         onPointerDown={handlePointerDown}
-        aria-label="OctoberAI Neural Companion"
-        title="Click to open OctoberAI • Drag to reposition assistant • Hover to rotate sphere"
+        aria-label="October Neural Companion"
+        title="Click to open October • Drag to reposition assistant • Hover to rotate sphere"
       >
         <NeuralCore
           size={80}
