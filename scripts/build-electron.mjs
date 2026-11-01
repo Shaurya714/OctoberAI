@@ -9,7 +9,7 @@ if (!fs.existsSync(outDir)) {
 
 console.log('Building Electron main & preload...');
 
-// Compile native active window helper on Windows if csc is present
+// Compile native helpers on Windows if csc is present
 if (process.platform === 'win32') {
   const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
   const cscPath32 = 'C:\\Windows\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe';
@@ -23,6 +23,20 @@ if (process.platform === 'win32') {
       console.log('Compiled ActiveWindow.exe helper');
     } catch (e) {
       console.warn('Could not compile ActiveWindow.exe, fallback will be used', e);
+    }
+  }
+
+  // Compile native offline SpeechRecognizer helper
+  const speechCsSource = path.resolve('electron/SpeechRecognizer.cs');
+  const speechExeOut = path.resolve('dist-electron/SpeechRecognizer.exe');
+  const speechDll = 'C:\\Windows\\Microsoft.Net\\assembly\\GAC_MSIL\\System.Speech\\v4.0_4.0.0.0__31bf3856ad364e35\\System.Speech.dll';
+  if (compiler && fs.existsSync(speechCsSource) && fs.existsSync(speechDll)) {
+    try {
+      const { execFileSync } = await import('child_process');
+      execFileSync(compiler, ['/nologo', `/r:${speechDll}`, `/out:${speechExeOut}`, speechCsSource]);
+      console.log('Compiled SpeechRecognizer.exe helper');
+    } catch (e) {
+      console.warn('Could not compile SpeechRecognizer.exe helper', e);
     }
   }
 }

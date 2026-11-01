@@ -64,6 +64,54 @@ async function resolveFallbackActiveWindow(resolve: (val: { appName: string; win
   }
 }
 
+function getSpeechRecognizerExePath(): string | null {
+  const possiblePaths = [
+    path.join(__dirname, 'SpeechRecognizer.exe'),
+    path.join(__dirname, '../dist-electron/SpeechRecognizer.exe'),
+    path.resolve('dist-electron/SpeechRecognizer.exe'),
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function transcribeWavAudio(audioBuffer: Buffer): Promise<{ success: boolean; text: string; confidence?: number; error?: string }> {
+  return new Promise((resolve) => {
+    const exePath = getSpeechRecognizerExePath();
+    if (!exePath) {
+      return resolve({ success: false, text: '', error: 'SpeechRecognizer engine is not compiled on this machine.' });
+    }
+
+    try {
+      const child = spawn(exePath, [], { stdio: ['pipe', 'pipe', 'ignore'] });
+      let stdoutData = '';
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutData += chunk.toString('utf8');
+      });
+
+      child.on('error', (err) => {
+        resolve({ success: false, text: '', error: err.message });
+      });
+
+      child.on('close', () => {
+        try {
+          const parsed = JSON.parse(stdoutData.trim());
+          resolve(parsed);
+        } catch {
+          resolve({ success: false, text: '', error: 'Failed to parse speech recognizer output' });
+        }
+      });
+
+      child.stdin.write(audioBuffer);
+      child.stdin.end();
+    } catch (err: any) {
+      resolve({ success: false, text: '', error: err?.message || 'Failed to launch speech recognizer' });
+    }
+  });
+}
+
 function createWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { workArea } = primaryDisplay;
@@ -249,6 +297,18 @@ ipcMain.handle('set-ignore-mouse-events', (_event, ignore: boolean, options?: { 
 
 ipcMain.handle('get-active-window', async () => {
   return await getActiveWindowInfo();
+});
+
+ipcMain.handle('transcribe-audio', async (_event, base64Wav: string) => {
+  if (!base64Wav) {
+    return { success: false, text: '', error: 'No audio data provided' };
+  }
+  try {
+    const buffer = Buffer.from(base64Wav, 'base64');
+    return await transcribeWavAudio(buffer);
+  } catch (err: any) {
+    return { success: false, text: '', error: err?.message || 'Failed to process audio buffer' };
+  }
 });
 
 ipcMain.handle('move-window', (_event, { deltaX, deltaY }: { deltaX: number; deltaY: number }) => {

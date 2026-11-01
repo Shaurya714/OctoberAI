@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FloatingPill } from './components/FloatingPill';
 import { ExpandedPanel } from './components/ExpandedPanel';
 import { ScreenAwareness } from './components/ScreenAwareness';
-import { Message } from './types';
+import { Message, InputModality } from './types';
 import { BackendChatMessage, streamChatMessage } from './services/api';
 import { NeuralState } from './components/NeuralCore';
 import { NeuralTheme, getSavedTheme, saveTheme } from './theme';
@@ -37,10 +37,29 @@ export const App: React.FC = () => {
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakResponsesEnabled, setSpeakResponsesEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('october_speak_responses_enabled') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleSpeakResponses = useCallback(() => {
+    setSpeakResponsesEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('october_speak_responses_enabled', String(next));
+      } catch {}
+      return next;
+    });
+  }, []);
 
   const isSubmittingRef = useRef<boolean>(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const accumulatedAssistantTextRef = useRef<string>('');
+  const transcriptionTimerRef = useRef<any>(null);
+  const isTranscribingRef = useRef<boolean>(false);
 
   // Sync theme with document element and persistence
   useEffect(() => {
@@ -67,11 +86,72 @@ export const App: React.FC = () => {
     updateElectronWindow(isScreenMode ? 'screen' : 'chat');
   };
 
-  const stopVoiceMode = useCallback(() => {
+  const performTranscription = useCallback(async () => {
+    if (isTranscribingRef.current) return;
+    if (!window.electronAPI?.transcribeAudio) return;
+
+    const wavBase64 = audioCaptureService.getRecordedWavBase64();
+    if (!wavBase64) return;
+
+    try {
+      isTranscribingRef.current = true;
+      const res = await window.electronAPI.transcribeAudio(wavBase64);
+      if (res && res.success && res.text) {
+        const text = res.text.trim();
+        if (text) {
+          setVoiceTranscript(text);
+          setInterimVoiceTranscript('');
+          setVoiceError(null);
+        }
+      }
+    } catch (err: any) {
+      console.warn('Transcription error:', err);
+    } finally {
+      isTranscribingRef.current = false;
+    }
+  }, []);
+
+  const stopVoiceMode = useCallback(async (transcribeRemaining: boolean = false): Promise<string> => {
+    if (transcriptionTimerRef.current) {
+      clearInterval(transcriptionTimerRef.current);
+      transcriptionTimerRef.current = null;
+    }
+
+    let remainingWav: string | null = null;
+    if (transcribeRemaining && audioCaptureService.getIsCapturing()) {
+      remainingWav = audioCaptureService.getRecordedWavBase64();
+    }
+
     setIsVoiceListening(false);
     audioCaptureService.stop();
     speechRecognitionService.stop();
     setAudioLevel(0);
+
+    let finalRecognized = '';
+    if (remainingWav && window.electronAPI?.transcribeAudio && !isTranscribingRef.current) {
+      try {
+        isTranscribingRef.current = true;
+        setInterimVoiceTranscript('Transcribing speech...');
+        const res = await window.electronAPI.transcribeAudio(remainingWav);
+        if (res && res.success && res.text) {
+          finalRecognized = res.text.trim();
+          if (finalRecognized) {
+            setVoiceTranscript(finalRecognized);
+            setInterimVoiceTranscript('');
+            setVoiceError(null);
+          } else {
+            setInterimVoiceTranscript('');
+          }
+        } else {
+          setInterimVoiceTranscript('');
+        }
+      } catch {
+        setInterimVoiceTranscript('');
+      } finally {
+        isTranscribingRef.current = false;
+      }
+    }
+    return finalRecognized;
   }, []);
 
   // Explicit minimize / collapse: only via collapse control or Escape key
@@ -125,9 +205,18 @@ export const App: React.FC = () => {
     setInterimVoiceTranscript('');
     setIsVoiceListening(true);
 
+    if (transcriptionTimerRef.current) {
+      clearInterval(transcriptionTimerRef.current);
+      transcriptionTimerRef.current = null;
+    }
+
     // 1. Audio Level Analyzer for Audio-Reactive NeuralCore
     const audioStarted = await audioCaptureService.start(source, {
-      onError: (err) => setVoiceError(err),
+      onLevel: (level) => setAudioLevel(level),
+      onError: (err) => {
+        setVoiceError(err);
+        setIsVoiceListening(false);
+      },
     });
 
     if (!audioStarted) {
@@ -136,7 +225,13 @@ export const App: React.FC = () => {
     }
 
     // 2. English Speech Recognition
-    if (source === 'microphone') {
+    if (window.electronAPI?.transcribeAudio) {
+      // Offline Windows System.Speech Engine (processes both mic & system loopback)
+      transcriptionTimerRef.current = setInterval(() => {
+        performTranscription();
+      }, 2500);
+    } else if (source === 'microphone') {
+      // Browser fallback (Web Speech API)
       const recognitionStarted = speechRecognitionService.start({
         onStart: () => {},
         onInterimResult: (interim) => {
@@ -162,20 +257,29 @@ export const App: React.FC = () => {
         );
       }
     } else {
-      // System audio capture active: visualizer active, document honest limitation
-      setVoiceTranscript('');
-      setInterimVoiceTranscript('Capturing computer audio playback... (Audio-reactive visualization active)');
+      setVoiceError('System audio transcription requires the desktop Electron runtime.');
     }
   };
 
-  const handleToggleVoice = () => {
+  const handleToggleVoice = async () => {
     if (isSpeaking) {
       ttsService.stop();
       setIsSpeaking(false);
     }
 
     if (isVoiceListening) {
-      stopVoiceMode();
+      // Deactivating: collect completed transcript and submit through pipeline exactly once
+      const finalResult = await stopVoiceMode(true);
+      const textToSubmit = (finalResult || voiceTranscript).trim();
+
+      // Clear transcript buffer
+      setVoiceTranscript('');
+      setInterimVoiceTranscript('');
+      audioCaptureService.clearRecordedAudio();
+
+      if (textToSubmit) {
+        handleSendMessage(textToSubmit, 'microphone');
+      }
     } else {
       // Exit screen mode if currently active (mutual exclusivity)
       if (isScreenMode) {
@@ -186,6 +290,8 @@ export const App: React.FC = () => {
         setIsExpanded(true);
         updateElectronWindow('chat');
       }
+      setVoiceTranscript('');
+      setInterimVoiceTranscript('');
       startVoiceMode(voiceInputSource);
     }
   };
@@ -200,10 +306,11 @@ export const App: React.FC = () => {
   const handleConfirmVoiceTranscript = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    stopVoiceMode();
+    stopVoiceMode(false);
+    audioCaptureService.clearRecordedAudio();
     setVoiceTranscript('');
     setInterimVoiceTranscript('');
-    handleSendMessage(trimmed);
+    handleSendMessage(trimmed, 'microphone');
   };
 
   // Screen Awareness Handlers
@@ -233,13 +340,16 @@ export const App: React.FC = () => {
   // Clean up audio & speech on unmount
   useEffect(() => {
     return () => {
+      if (transcriptionTimerRef.current) {
+        clearInterval(transcriptionTimerRef.current);
+      }
       audioCaptureService.stop();
       speechRecognitionService.stop();
       ttsService.stop();
     };
   }, []);
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, modality: InputModality = 'text') => {
     const trimmed = text.trim();
     if (!trimmed || isLoading || isStreaming || isSubmittingRef.current) return;
 
@@ -248,6 +358,12 @@ export const App: React.FC = () => {
       ttsService.stop();
       setIsSpeaking(false);
     }
+
+    // Section C: Immutable response speech policy captured at submission time
+    const shouldSpeakResponse =
+      modality === 'microphone' ||
+      (modality === 'text' && speakResponsesEnabled) ||
+      (modality === 'system_audio' && speakResponsesEnabled);
 
     isSubmittingRef.current = true;
     setIsLoading(true);
@@ -317,14 +433,16 @@ export const App: React.FC = () => {
             setIsStreaming(false);
             isSubmittingRef.current = false;
 
-            // Section 3.5: Speak completed AI response using frontend text-to-speech
-            const fullResponse = accumulatedAssistantTextRef.current;
-            if (fullResponse) {
-              ttsService.speak(fullResponse, {
-                onStart: () => setIsSpeaking(true),
-                onEnd: () => setIsSpeaking(false),
-                onError: () => setIsSpeaking(false),
-              });
+            // Section C: Speak completed AI response according to immutable submission policy
+            if (shouldSpeakResponse) {
+              const fullResponse = accumulatedAssistantTextRef.current;
+              if (fullResponse) {
+                ttsService.speak(fullResponse, {
+                  onStart: () => setIsSpeaking(true),
+                  onEnd: () => setIsSpeaking(false),
+                  onError: () => setIsSpeaking(false),
+                });
+              }
             }
           },
           onError: (errorDetail: string) => {
@@ -447,6 +565,8 @@ export const App: React.FC = () => {
           voiceInputSource={voiceInputSource}
           voiceError={voiceError}
           isSpeaking={isSpeaking}
+          speakResponsesEnabled={speakResponsesEnabled}
+          onToggleSpeakResponses={handleToggleSpeakResponses}
           onStopSpeaking={() => {
             ttsService.stop();
             setIsSpeaking(false);

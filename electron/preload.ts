@@ -25,6 +25,7 @@ export interface ElectronAPI {
   setIgnoreMouseEvents?: (ignore: boolean, options?: { forward?: boolean }) => Promise<void>;
   getActiveWindow?: () => Promise<{ appName: string; windowTitle: string }>;
   onActiveWindowUpdated?: (callback: (data: { appName: string; windowTitle: string }) => void) => () => void;
+  transcribeAudio?: (base64Wav: string) => Promise<{ success: boolean; text: string; confidence?: number; error?: string }>;
 }
 
 const electronAPI: ElectronAPI = {
@@ -39,6 +40,7 @@ const electronAPI: ElectronAPI = {
   setIgnoreMouseEvents: (ignore: boolean, options?: { forward?: boolean }) =>
     ipcRenderer.invoke('set-ignore-mouse-events', ignore, options),
   getActiveWindow: () => ipcRenderer.invoke('get-active-window'),
+  transcribeAudio: (base64Wav: string) => ipcRenderer.invoke('transcribe-audio', base64Wav),
   onActiveWindowUpdated: (callback: (data: { appName: string; windowTitle: string }) => void) => {
     const subscription = (_event: IpcRendererEvent, data: { appName: string; windowTitle: string }) => callback(data);
     ipcRenderer.on('active-window-updated', subscription);

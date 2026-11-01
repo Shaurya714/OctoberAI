@@ -22,24 +22,58 @@ export class TextToSpeechService {
       if (this.synth.onvoiceschanged !== undefined) {
         this.synth.onvoiceschanged = () => this.initVoices();
       }
+      this.synth.addEventListener('voiceschanged', () => this.initVoices());
     }
   }
 
   private initVoices(): void {
     if (!this.synth) return;
     const voices = this.synth.getVoices();
-    // Prioritize natural sounding English voices
-    const enVoices = voices.filter((v) => v.lang.startsWith('en'));
-    const preferred = enVoices.find(
-      (v) =>
-        v.name.includes('Natural') ||
-        v.name.includes('Neural') ||
-        v.name.includes('Google') ||
-        v.name.includes('David') ||
-        v.name.includes('Mark') ||
-        v.name.includes('Zira')
-    );
-    this.selectedVoice = preferred || enVoices[0] || voices[0] || null;
+    if (!voices || voices.length === 0) return;
+
+    // Filter to English voices
+    const enVoices = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
+    const candidateVoices = enVoices.length > 0 ? enVoices : voices;
+
+    // Intelligent voice ranking: prioritize soft, natural female English voices
+    const scoreVoice = (v: SpeechSynthesisVoice): number => {
+      const name = v.name.toLowerCase();
+      let score = 0;
+
+      // Penalize male voices heavily
+      const maleNames = ['david', 'mark', 'george', 'richard', 'james', 'male', 'guy', 'stefan', 'paul', 'adam'];
+      if (maleNames.some((m) => name.includes(m))) {
+        score -= 1000;
+      }
+
+      // Prioritize natural / neural voices
+      if (name.includes('natural') || name.includes('neural') || name.includes('online')) {
+        score += 80;
+      }
+
+      // High priority for soft natural female voices (Windows Zira, Edge Natural Jenny/Aria/Sonia, macOS Samantha)
+      const preferredFemaleNames = [
+        'jenny', 'aria', 'sonia', 'zira', 'samantha', 'karen', 'victoria', 'eva', 'clara', 'sarah', 'emma', 'amy', 'female'
+      ];
+      for (const f of preferredFemaleNames) {
+        if (name.includes(f)) {
+          score += 100;
+          break;
+        }
+      }
+
+      // Neutral conversational English
+      if (v.lang === 'en-US' || v.lang === 'en_US') {
+        score += 15;
+      } else if (v.lang.startsWith('en')) {
+        score += 5;
+      }
+
+      return score;
+    };
+
+    const sorted = [...candidateVoices].sort((a, b) => scoreVoice(b) - scoreVoice(a));
+    this.selectedVoice = sorted[0] || null;
   }
 
   /**
@@ -91,8 +125,8 @@ export class TextToSpeechService {
     if (this.selectedVoice) {
       utterance.voice = this.selectedVoice;
     }
-    utterance.rate = 1.05; // Slightly conversational briskness
-    utterance.pitch = 1.0;
+    utterance.rate = 1.0; // Soft conversational pace
+    utterance.pitch = 1.02; // Warm, natural vocal inflection
 
     utterance.onstart = () => {
       this.isSpeaking = true;

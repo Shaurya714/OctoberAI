@@ -11,6 +11,8 @@ export interface Message {
 
 export type CompanionStatus = 'ready' | 'idle' | 'busy';
 
+export type InputModality = 'text' | 'microphone' | 'system_audio';
+
 export interface ScreenCaptureResult {
   success: boolean;
   image?: string;
@@ -36,6 +38,7 @@ export interface ElectronAPI {
   setIgnoreMouseEvents?: (ignore: boolean, options?: { forward?: boolean }) => Promise<void>;
   getActiveWindow?: () => Promise<{ appName: string; windowTitle: string }>;
   onActiveWindowUpdated?: (callback: (data: { appName: string; windowTitle: string }) => void) => () => void;
+  transcribeAudio?: (base64Wav: string) => Promise<{ success: boolean; text: string; confidence?: number; error?: string }>;
 }
 
 declare global {

@@ -3,7 +3,7 @@ import { StatusIndicator } from './StatusIndicator';
 import { ChatArea } from './ChatArea';
 import { ChatInput } from './ChatInput';
 import { CloseIcon, CollapseIcon, PinIcon, PaletteIcon, CheckIcon } from './Icons';
-import { Message } from '../types';
+import { Message, InputModality } from '../types';
 import { NeuralCore, NeuralState } from './NeuralCore';
 import { NeuralTheme } from '../theme';
 import { AudioInputSource } from '../services/audioCapture';
@@ -21,12 +21,14 @@ interface ExpandedPanelProps {
   voiceInputSource?: AudioInputSource;
   voiceError?: string | null;
   isSpeaking?: boolean;
+  speakResponsesEnabled?: boolean;
+  onToggleSpeakResponses?: () => void;
   onStopSpeaking?: () => void;
   onSelectTheme: (theme: NeuralTheme) => void;
   onTogglePin: () => void;
   onCollapse: () => void;
   onClose: () => void;
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string, modality?: InputModality) => void;
   onInputFocusChange: (focused: boolean) => void;
   onInputChange: (text: string) => void;
   onMouseEnter: () => void;
@@ -50,6 +52,8 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
   voiceInputSource = 'microphone',
   voiceError = null,
   isSpeaking = false,
+  speakResponsesEnabled = false,
+  onToggleSpeakResponses,
   onStopSpeaking,
   onSelectTheme,
   onTogglePin,
@@ -289,7 +293,10 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
           onInputChange={onInputChange}
           isLoading={isLoading}
           isVoiceListening={isVoiceListening}
+          voiceTranscript={voiceTranscript}
           voiceInputSource={voiceInputSource}
+          speakResponsesEnabled={speakResponsesEnabled}
+          onToggleSpeakResponses={onToggleSpeakResponses}
           onToggleVoice={onToggleVoice}
           onChangeVoiceSource={onChangeVoiceSource}
           onToggleScreenAwareness={onToggleScreenAwareness}
