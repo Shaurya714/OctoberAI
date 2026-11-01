@@ -792,20 +792,153 @@
   }
 }
 
-.voice-toolbar-group {
-  position: relative;
+/* ==========================================================================
+   5. Minimal Command Dock (Unified Bottom Controls)
+   ========================================================================== */
+
+.command-dock {
   display: flex;
   align-items: center;
-  gap: 2px;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 5px;
+  gap: 8px;
+  box-sizing: border-box;
 }
 
-.feature-btn-active {
+.dock-left-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dock-right-group {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Base dock button styling */
+.dock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 25px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-alpha-04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dock-btn:hover {
+  background: var(--accent-alpha-12);
+  color: var(--color-cyan);
+  border-color: var(--border-medium);
+}
+
+.dock-btn:active {
+  transform: scale(0.98);
+}
+
+.dock-icon {
+  flex-shrink: 0;
+  transition: color var(--transition-fast);
+}
+
+.dock-label {
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+/* A. Voice Input — Prominent Primary Split Control */
+.dock-voice-control {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 25px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-alpha-08);
+  border: 1px solid var(--border-medium);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: all var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dock-voice-control:hover {
+  border-color: var(--border-cyan);
+  background: var(--accent-alpha-12);
+}
+
+.dock-voice-main-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px 0 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  border-top-left-radius: var(--radius-sm);
+  border-bottom-left-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+
+.dock-voice-main-btn:hover {
+  color: var(--color-cyan);
+}
+
+.dock-voice-caret-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px 0 5px;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-top-right-radius: var(--radius-sm);
+  border-bottom-right-radius: var(--radius-sm);
+  font-size: 9px;
+  transition: all var(--transition-fast);
+}
+
+.dock-voice-caret-btn:hover,
+.dock-voice-caret-btn.caret-active {
+  background: var(--accent-alpha-12);
+  color: var(--color-cyan);
+}
+
+/* Voice Active / Listening States */
+.dock-voice-control.voice-active {
   background: var(--accent-alpha-22) !important;
-  color: var(--color-cyan) !important;
   border-color: var(--border-cyan) !important;
+  box-shadow: 0 0 12px var(--color-cyan-glow);
 }
 
-.mic-pulse-dot {
+.dock-voice-control.voice-active .dock-voice-main-btn {
+  color: var(--color-cyan);
+}
+
+.dock-voice-control.voice-active .dock-voice-caret-btn {
+  border-left-color: var(--border-cyan);
+  color: var(--color-cyan);
+}
+
+.dock-pulse-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -815,39 +948,92 @@
 }
 
 @keyframes dot-pulse {
-  from { opacity: 0.4; transform: scale(0.8); }
+  from { opacity: 0.35; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1.3); }
 }
 
-.toolbar-source-chip {
-  height: 22px;
-  padding: 0 6px;
-  display: flex;
+/* B. Screen Awareness Control */
+.dock-screen-btn {
+  background: var(--accent-alpha-04);
+  border-color: var(--border-subtle);
+}
+
+/* C. Speech Output Preference Toggle */
+.dock-toggle-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 3px;
-  background: var(--accent-alpha-08);
-  border: 1px solid var(--border-subtle);
+  gap: 7px;
+  height: 25px;
+  padding: 0 8px 0 9px;
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-size: 9.5px;
+  background: var(--accent-alpha-04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.toolbar-source-chip:hover {
-  background: var(--accent-alpha-18);
-  color: var(--text-secondary);
+.dock-toggle-btn:hover {
+  background: var(--accent-alpha-08);
+  border-color: var(--border-medium);
+  color: var(--text-primary);
 }
 
-.source-caret {
-  font-size: 8px;
+.dock-toggle-btn.dock-toggle-active {
+  border-color: var(--border-cyan);
+  background: var(--accent-alpha-12);
 }
 
+.dock-toggle-btn.dock-toggle-active .dock-label {
+  color: var(--text-primary);
+}
+
+/* Micro Toggle Switch (iOS / Desktop Hardware Style) */
+.dock-switch-track {
+  position: relative;
+  display: inline-block;
+  width: 22px;
+  height: 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.dock-switch-track.switch-on {
+  background: var(--accent-alpha-38);
+  border-color: var(--border-cyan);
+  box-shadow: 0 0 6px var(--color-cyan-glow);
+}
+
+.dock-switch-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.dock-switch-track.switch-on .dock-switch-thumb {
+  transform: translateX(10px);
+  background: var(--color-cyan);
+  box-shadow: 0 0 4px var(--color-cyan);
+}
+
+/* Audio Source Popover Menu */
 .audio-source-menu {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  min-width: 170px;
+  min-width: 185px;
   background: var(--bg-surface-glass);
   border: 1px solid var(--border-medium);
   border-radius: var(--radius-card);
@@ -865,8 +1051,8 @@
 .source-menu-item {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  padding: 5px 8px;
+  align-items: stretch;
+  padding: 6px 9px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -884,6 +1070,17 @@
   border-color: var(--border-cyan);
 }
 
+.source-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.source-check-icon {
+  color: var(--color-cyan);
+}
+
 .item-title {
   font-size: 11.5px;
   font-weight: 600;
@@ -893,6 +1090,18 @@
 .item-desc {
   font-size: 9px;
   color: var(--text-muted);
+  margin-top: 1px;
+}
+
+/* Responsive Wrap for Narrow Floating Window Layouts */
+@media (max-width: 370px) {
+  .command-dock {
+    flex-wrap: wrap;
+    row-gap: 5px;
+  }
+  .dock-right-group {
+    margin-left: 0;
+  }
 }
 
 /* 4.1 Live Voice Transcription Placement directly below neural core */
